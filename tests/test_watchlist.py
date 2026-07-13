@@ -7,7 +7,7 @@ Tests for the watchlist service, modeled on tests/test_collection.py.
 import pytest
 from app import create_app, db
 from models import User, Film, WatchlistEntry
-from services.watchlist_service import add_to_watchlist
+from services.watchlist_service import add_to_watchlist, AlreadyOnWatchlistError
 from services.collection_service import FilmNotFoundError
 
 
@@ -63,6 +63,26 @@ def test_add_to_watchlist_creates_entry(app, sample_user, sample_film):
             user_id=sample_user, film_id=sample_film
         ).first()
         assert in_db is not None
+
+
+# ── Deduplication ────────────────────────────────────────────────────────────
+
+def test_add_to_watchlist_duplicate_raises(app, sample_user, sample_film):
+    """
+    Adding the same film twice should raise AlreadyOnWatchlistError,
+    not silently create a duplicate entry.
+    """
+    with app.app_context():
+        add_to_watchlist(user_id=sample_user, film_id=sample_film)
+
+        with pytest.raises(AlreadyOnWatchlistError):
+            add_to_watchlist(user_id=sample_user, film_id=sample_film)
+
+        # Confirm only one entry exists
+        count = WatchlistEntry.query.filter_by(
+            user_id=sample_user, film_id=sample_film
+        ).count()
+        assert count == 1
 
 
 # ── Nonexistent film ─────────────────────────────────────────────────────────
