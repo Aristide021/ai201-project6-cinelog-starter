@@ -46,6 +46,12 @@ I used Claude Code (Claude) throughout this project in a few distinct ways:
 
 **How I verified no conflict remains:** After `git rebase --continue` completed, I ran `git log --oneline --merges origin/main..HEAD`, which returned nothing — confirming a linear history with no merge commits. I also grepped the watchlist code (`grep -rn "integer\|Integer" services/watchlist_service.py routes/watchlist/watchlist.py`) to confirm no other stale integer references remained outside of unrelated fields like `Film.year` and `CollectionEntry.rating`, which are legitimately integers. Finally, I ran `pytest tests/ -v` — all 7 tests (4 collection + 3 watchlist) passed after the rebase, confirming the UUID type change didn't break the watchlist test fixtures, which create `Film` rows and rely on SQLAlchemy generating a UUID `id` via `default=generate_uuid`.
 
+## Commit History
+
+Final `feature/watchlist` history after rebasing onto `main`: 13 commits ahead of `main`, all in conventional format, no merge commits — linear history confirmed by `git log --oneline --merges origin/main..HEAD` returning nothing.
+
+![git log --oneline output showing linear, conventionally-formatted commits on feature/watchlist, no merge commits](docs/git-log.png)
+
 ## Stretch Features
 
 **`remove_from_watchlist()`:** Added in `services/watchlist_service.py`, following the same pattern as `remove_from_collection()`: it looks up the `WatchlistEntry` by `user_id` + `film_id`, and if none exists it raises a new `NotOnWatchlistError` instead of silently no-op'ing — mirroring `NotInCollectionError`. Exposed via `DELETE /watchlist/<user_id>/remove` (body: `{"film_id": "<uuid>"}`), which catches `NotOnWatchlistError` and returns a 404, matching `routes/collection.py`'s `remove_film` endpoint. Two tests cover it: `test_remove_from_watchlist_deletes_entry` (happy path — confirms the row is actually gone from the DB after removal, not just that no exception was raised) and `test_remove_from_watchlist_not_present_raises` (removing a film never added to the watchlist raises `NotOnWatchlistError`).
