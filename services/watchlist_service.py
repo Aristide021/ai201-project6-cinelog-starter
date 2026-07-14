@@ -14,13 +14,15 @@ class AlreadyOnWatchlistError(Exception):
     pass
 
 
-def add_to_watchlist(user_id, film_id):
+def add_to_watchlist(user_id, film_id, public=None):
     """
     Add a film to a user's watchlist.
 
     Args:
         user_id (str): UUID of the user.
         film_id (str): UUID of the film.
+        public (bool, optional): Visibility for this entry. If omitted,
+            falls back to the model's default (private — see Comment 4).
 
     Returns:
         WatchlistEntry: The newly created entry.
@@ -42,6 +44,8 @@ def add_to_watchlist(user_id, film_id):
         )
 
     entry = WatchlistEntry(user_id=user_id, film_id=film_id)
+    if public is not None:
+        entry.public = public
     db.session.add(entry)
     db.session.commit()
     return entry
