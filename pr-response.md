@@ -46,17 +46,25 @@ I used Claude Code (Claude) throughout this project in a few distinct ways:
 
 **How I verified no conflict remains:** After `git rebase --continue` completed, I ran `git log --oneline --merges origin/main..HEAD`, which returned nothing — confirming a linear history with no merge commits. I also grepped the watchlist code (`grep -rn "integer\|Integer" services/watchlist_service.py routes/watchlist/watchlist.py`) to confirm no other stale integer references remained outside of unrelated fields like `Film.year` and `CollectionEntry.rating`, which are legitimately integers. Finally, I ran `pytest tests/ -v` — all 7 tests (4 collection + 3 watchlist) passed after the rebase, confirming the UUID type change didn't break the watchlist test fixtures, which create `Film` rows and rely on SQLAlchemy generating a UUID `id` via `default=generate_uuid`.
 
+## Stretch Features
+
+**`remove_from_watchlist()`:** Added in `services/watchlist_service.py`, following the same pattern as `remove_from_collection()`: it looks up the `WatchlistEntry` by `user_id` + `film_id`, and if none exists it raises a new `NotOnWatchlistError` instead of silently no-op'ing — mirroring `NotInCollectionError`. Exposed via `DELETE /watchlist/<user_id>/remove` (body: `{"film_id": "<uuid>"}`), which catches `NotOnWatchlistError` and returns a 404, matching `routes/collection.py`'s `remove_film` endpoint. Two tests cover it: `test_remove_from_watchlist_deletes_entry` (happy path — confirms the row is actually gone from the DB after removal, not just that no exception was raised) and `test_remove_from_watchlist_not_present_raises` (removing a film never added to the watchlist raises `NotOnWatchlistError`).
+
+**Visibility toggle endpoint:** `add_to_watchlist()` now accepts an optional `public` keyword argument. When omitted (`None`), the `WatchlistEntry` uses the model's column default (private, per Comment 4). When provided, it overrides the default on that entry (`entry.public = public`) before the row is inserted. The `POST /watchlist/<user_id>/add` endpoint passes `data.get("public")` through, so a caller can explicitly opt an entry into `public: true` at creation time without needing a second call, while still getting private-by-default if they omit the field entirely. Verified manually with an in-memory app context: calling `add_to_watchlist()` with no `public` argument produced `entry.public == False`, and calling it with `public=True` produced `entry.public == True`.
+
 ## PR Description
 <!-- Written at the end — feature overview, design decisions, manual testing steps -->
 
 ### Summary
 
-Adds a watchlist feature to CineLog so users can save films they want to watch, separate from their collection of films they've already watched. Includes a `WatchlistEntry` model, `add_to_watchlist()` / `get_watchlist()` service functions, and `GET /watchlist/<user_id>` and `POST /watchlist/<user_id>/add` endpoints. This PR also addresses all six review comments from the initial submission:
+Adds a watchlist feature to CineLog so users can save films they want to watch, separate from their collection of films they've already watched. Includes a `WatchlistEntry` model, `add_to_watchlist()` / `get_watchlist()` / `remove_from_watchlist()` service functions, and `GET /watchlist/<user_id>`, `POST /watchlist/<user_id>/add`, and `DELETE /watchlist/<user_id>/remove` endpoints. This PR also addresses all six review comments from the initial submission:
 
 - Renamed `save_to_watchlist()` → `add_to_watchlist()` to match the project's `verb_to_noun` naming convention.
 - Added deduplication so adding the same film twice raises `AlreadyOnWatchlistError` (409) instead of creating a duplicate row, mirroring `add_to_collection()`.
-- Added `tests/test_watchlist.py` covering entry creation, duplicate rejection, and a nonexistent `film_id` (`FilmNotFoundError`, 404).
+- Added `tests/test_watchlist.py` covering entry creation, duplicate rejection, a nonexistent `film_id` (`FilmNotFoundError`, 404), and removal (both happy path and the not-present case).
 - Rebased onto `main` to pick up the integer → UUID film ID refactor, updating `WatchlistEntry.film_id` to `db.String(36)`.
+
+Stretch additions: `remove_from_watchlist()` (with tests), and an optional `public` parameter on the add endpoint so callers can override the default visibility per entry. See "Stretch Features" above for details.
 
 ### Design decisions
 
@@ -70,5 +78,8 @@ Adds a watchlist feature to CineLog so users can save films they want to watch, 
 3. `POST /watchlist/<user_id>/add` with body `{"film_id": "<film-uuid>"}` — expect `201` and a JSON entry with `"public": false`.
 4. Repeat the same `POST` — expect `409` with an `AlreadyOnWatchlistError` message, and confirm via `GET /watchlist/<user_id>` that only one entry exists.
 5. `POST /watchlist/<user_id>/add` with a nonexistent `film_id` (e.g. `"00000000-0000-0000-0000-000000000000"`) — expect `404`.
-6. Add a second, third film a few seconds apart and `GET /watchlist/<user_id>` — confirm the response is ordered most-recently-added first, not alphabetically.
-7. `pytest tests/ -v` — all tests should pass (7 total: 4 collection, 3 watchlist).
+6. `POST /watchlist/<user_id>/add` for a second film with body `{"film_id": "<film-uuid>", "public": true}` — expect `201` with `"public": true`, confirming the visibility toggle overrides the private default.
+7. Add a third film a few seconds after the others and `GET /watchlist/<user_id>` — confirm the response is ordered most-recently-added first, not alphabetically.
+8. `DELETE /watchlist/<user_id>/remove` with body `{"film_id": "<film-uuid>"}` for one of the films added above — expect `200`, then confirm via `GET /watchlist/<user_id>` that it's gone.
+9. Repeat the same `DELETE` for the same film — expect `404` with a `NotOnWatchlistError` message, confirming it doesn't silently succeed twice.
+10. `pytest tests/ -v` — all tests should pass (9 total: 4 collection, 5 watchlist).
